@@ -800,18 +800,47 @@ async function runImport(file){
   try{
     notice('<span>Reading the file…</span>');
     if(!window.XLSX) await loadScript('https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js');
-    const wb=XLSX.read(await file.arrayBuffer());
-    const rows=n=>XLSX.utils.sheet_to_json(wb.Sheets[n],{defval:'',raw:false});
-    const L=rows('Leads'), U=rows('Updates');
-    if(!L.length) throw new Error('No Leads tab');
+    const wb=XLSX.read(await file.arrayBuffer(),{cellDates:true});
+    const find=n=>wb.SheetNames.find(x=>x.trim().toLowerCase()===n);
     const num=v=>v===''||v==null||isNaN(Number(v))?null:Number(v);
-    const byLead={};
-    U.forEach(u=>{(byLead[u['Lead ID']]=byLead[u['Lead ID']]||[]).push(Object.assign({id:String(u['ID']),d:String(u['Date']||''),t:String(u['Update']||'')},
-      u['Before']?{before:String(u['Before'])}:{}, u['By']?{by:String(u['By'])}:{}, u['Logged at']?{at:String(u['Logged at'])}:{}))});
-    const docs=L.filter(r=>r['ID']).map(r=>({id:String(r['ID']),data:{company:String(r['Company']||''),date:String(r['Date']||''),sales:String(r['Sales']||''),
-      country:String(r['Country']||''),volume:num(r['Volume']),status:num(r['Status']),fu:String(r['FU']||''),cls:String(r['Class']||''),
-      outreach:String(r['Outreach']||''),website:String(r['Website']||''),contact:String(r['Contact']||''),email:String(r['Email']||''),
-      phone:String(r['Phone']||''),order:num(r['Order'])??0,updates:byLead[r['ID']]||[]}}));
+    const iso=v=>{ if(v instanceof Date){ const d=new Date(v.getTime()+12*3600e3); return d.toISOString().slice(0,10);} const m=String(v||'').trim().match(/^(\d{4})-(\d{2})-(\d{2})/); return m?m[0]:''; };
+    const str=v=>String(v==null?'':v).replace(/ /g,' ').trim();
+    let docs=[];
+    if(find('leads')){
+      const rows=n=>XLSX.utils.sheet_to_json(wb.Sheets[n],{defval:'',raw:false,dateNF:'yyyy-mm-dd'});
+      const L=rows(find('leads')), U=find('updates')?rows(find('updates')):[];
+      const byLead={};
+      U.forEach(u=>{(byLead[u['Lead ID']]=byLead[u['Lead ID']]||[]).push(Object.assign({id:str(u['ID']),d:str(u['Date']),t:str(u['Update'])},
+        u['Before']?{before:str(u['Before'])}:{}, u['By']?{by:str(u['By'])}:{}, u['Logged at']?{at:str(u['Logged at'])}:{}))});
+      docs=L.filter(r=>r['ID']).map(r=>({id:str(r['ID']),data:{company:str(r['Company']),date:str(r['Date']),sales:str(r['Sales']),
+        country:str(r['Country']),volume:num(r['Volume']),status:num(r['Status']),fu:str(r['FU']),cls:str(r['Class']),
+        outreach:str(r['Outreach']),website:str(r['Website']),contact:str(r['Contact']),email:str(r['Email']),
+        phone:str(r['Phone']),order:num(r['Order'])??0,updates:byLead[r['ID']]||[]}}));
+    } else if(find('pipeline')){
+      // the original Sales Pipeline sheet: remarks split into dated updates
+      const A=XLSX.utils.sheet_to_json(wb.Sheets[find('pipeline')],{header:1,defval:'',raw:true});
+      const re=/\s*\|?\s*NEW UPDATE \((\d{1,2})\/(\d{1,2})\/(\d{4})\):\s*/;
+      const p2=n=>String(n).padStart(2,'0');
+      for(let i=1;i<A.length;i++){
+        const r=A[i], company=str(r[0]); if(!company) continue;
+        const date=iso(r[1]), rem=str(r[8]); const ups=[];
+        if(rem){
+          const parts=rem.split(re), first=parts[0].replace(/^[\s|]+|[\s|]+$/g,'');
+          if(parts.length===1) ups.push({d:date,t:first});
+          else{
+            if(first) ups.push({d:'',t:first,before:`${parts[3]}-${p2(parts[2])}-${p2(parts[1])}`});
+            for(let k=1;k<parts.length;k+=4){ const t=str(parts[k+3]); if(t) ups.push({d:`${parts[k+2]}-${p2(parts[k+1])}-${p2(parts[k])}`,t}); }
+          }
+        }
+        const id='r'+String(i+1).padStart(4,'0');
+        ups.forEach((u,n)=>u.id=id+'-'+n);
+        const st=num(r[5]);
+        docs.push({id,data:{company,date,sales:str(r[2]),country:str(r[3]),volume:typeof r[4]==='number'?r[4]:null,
+          status:st==null?null:Math.round(st),fu:iso(r[6]),cls:str(r[7]),outreach:str(r[9]),website:str(r[10]),
+          contact:str(r[11]),email:str(r[12]),phone:str(r[13]),order:i+1,updates:ups}});
+      }
+    } else throw new Error('this file has no Leads or Pipeline tab (it has: '+wb.SheetNames.join(', ')+')');
+    if(!docs.length) throw new Error('no leads found in the file');
     notice(`<span id="impTxt">Importing 0 of ${docs.length}…</span><div class="bar"><i id="impBar"></i></div>`);
     for(let i=0;i<docs.length;i+=400){
       const batch=db.batch();
