@@ -854,7 +854,7 @@ let unsub=null;
   if(firebaseConfig.apiKey==='PASTE'){ loaded=true; render(); notice('Setup is not finished: paste the Firebase config at the top of index.html.'); return; }
   firebase.initializeApp(firebaseConfig);
   auth=firebase.auth(); db=firebase.firestore();
-  try{ db.enablePersistence({synchronizeTabs:true}).catch(()=>{}); }catch(e){}
+  try{ db.settings({experimentalForceLongPolling:true, merge:true}); }catch(e){}
   auth.onAuthStateChanged(u=>{
     if(unsub){unsub();unsub=null}
     leads.clear(); col=null;
